@@ -29,34 +29,43 @@ const app = express();
 
 app.use(helmet());
 
-const allowedOrigins = new Set(
-  [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    process.env.FRONTEND_URL,
-    process.env.FRONTEND_URLS,
-  ]
-    .filter(Boolean)
-    .flatMap((value) => value.split(','))
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-);
+const ALLOWED_ORIGINS = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || '')
+  .split(',')
+  .map(s => s.trim().replace(/\/$/, ''))   // strip trailing slash
+  .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Not allowed by CORS'));
-    },
-    // Required so the browser sends the httpOnly session cookie on cross-origin
-    // requests (Vercel frontend -> Render backend). Without this the SSE
-    // endpoint will see no cookie and return 401.
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow no-origin requests (curl, health checks, server-to-server)
+    if (!origin) return callback(null, true);
 
+    const normalized = origin.replace(/\/$/, '');
+
+    if (ALLOWED_ORIGINS.includes(normalized)) {
+      return callback(null, true);
+    }
+
+    // Allow Vercel preview deployments for this project
+    if (/^https:\/\/cortex-ai-task-platform.*\.vercel\.app$/.test(normalized)) {
+      return callback(null, true);
+    }
+
+    // Allow localhost during development
+    if (/^http:\/\/localhost:\d+$/.test(normalized)) {
+      return callback(null, true);
+    }
+
+    console.warn(`[CORS] rejected origin: ${origin}`);
+    return callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Set-Cookie'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); 
 app.use(express.json());
 app.use(cookieParser());
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
